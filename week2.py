@@ -1,11 +1,81 @@
 import numpy as np
+import scipy.io as sio
 import torch
 import torch.nn as nn
 import torch.optim as optim
+
+# 1. 导入 TensorBoard
 from torch.utils.tensorboard.writer import SummaryWriter
 
+# 提取数据并展平为一维数组
+tx_data = sio.loadmat("exp15_paras.mat")["originPAM"].flatten()
+rx_data = sio.loadmat("exp15_CHAN1_2859.mat")["pamRecv"].flatten()
+
+print(f"tx 长度: {len(tx_data)}, rx 长度: {len(rx_data)}")
+
+# 数据预处理 (构建滑动窗口)
+window_size = 15
+pad_size = window_size // 2  # 中心位置为 7，两边各补 7 个零
+
+# 在接收信号两端补零，保证滑动窗口提取后总数量仍为 15000
+Rx_padded = np.pad(rx_data, (pad_size, pad_size), "constant")
+
+# 构建输入特征矩阵 X (15000 x 15) 和标签 Y (15000 x 1)
+X = np.zeros((len(tx_data), window_size))
+for i in range(len(tx_data)):
+    X[i] = Rx_padded[i : i + window_size]
+Y = tx_data.reshape(-1, 1)
+
+# 转换为 PyTorch 的 Tensor 格式
+X_tensor = torch.tensor(X, dtype=torch.float32)
+Y_tensor = torch.tensor(Y, dtype=torch.float32)
+
+# 按要求划分：前10000个为训练集，后5000个为测试集
+X_train = X_tensor[:10000]
+Y_train = Y_tensor[:10000]
+X_test = X_tensor[10000:15000]
+Y_test = Y_tensor[10000:15000]
+
+
+# 构建线性回归模型
+class LinearCompensator(nn.Module):
+    def __init__(self):
+        super(LinearCompensator, self).__init__()
+        # 输入维度 15 (15个Rx)，输出维度 1 (预测中心的1个Tx)
+        self.linear = nn.Linear(15, 1)
+
+    def forward(self, x):
+        return self.linear(x)
+
+
+model = LinearCompensator()
+
+# 定义损失函数和优化器
+criterion = nn.MSELoss()
+optimizer = optim.Adam(model.parameters(), lr=0.01)
+
+# 2. 初始化 TensorBoard Writer，指定保存路径
+writer = SummaryWriter("runs/Week1_Linear")
+
+# 训练模型
+epochs = 500  # 迭代次数
+for epoch in range(epochs):
+    model.train()  # 设置为训练模式
+    optimizer.zero_grad()  # 梯度清零
+
+    outputs = model(X_train)  # 前向传播
+    loss = criterion(outputs, Y_train)  # 计算损失
+
+    loss.backward()  # 反向传播求梯度
+    optimizer.step()  # 更新权重
+
+    # 3. 将每一个 epoch 的 Loss 写入 TensorBoard
+    writer.add_scalar("Loss/train", loss.item(), epoch)
+
+    if (epoch + 1) % 50 == 0:
+        print(f"Epoch [{epoch + 1}/{epochs}], Loss: {loss.item():.4f}")
+
 # PAM-8 符号与比特相互转换 (使用格雷码)
-# 标准 PAM8 电平映射到格雷码 (字符串表示方便理解)
 symbol_to_bit_map = {
     -7: "000",
     -5: "001",
@@ -32,112 +102,38 @@ def calculate_ber(y_true_symbols, y_pred_symbols):
     return bit_errors / total_bits
 
 
-# 定义全连接神经网络 (MLP) [cite: 6, 9]
-class MLP(nn.Module):
-    def __init__(self, input_size=15):
-        super(MLP, self).__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_size, 64),
-            nn.ReLU(),
-            nn.Linear(64, 32),
-            nn.ReLU(),
-            nn.Linear(32, 1),  # 输出连续值用于回归判决
-        )
+# 测试并计算 PAM8 误符号率 (SER) 与 误比特率 (BER)
+model.eval()  # 设置为评估模式
+with torch.no_grad():
+    predictions = model(X_test).numpy().flatten()
+    targets = Y_test.numpy().flatten()
 
-    def forward(self, x):
-        return self.net(x)
+    # 提取 PAM8 的标准理想电平值
+    pam8_levels = np.unique(tx_data)
 
+    # 判决逻辑：对于每一个预测出的连续值，找到距离它最近的标准 PAM8 电平
+    pred_decisions = np.array(
+        [pam8_levels[np.argmin(np.abs(pam8_levels - p))] for p in predictions]
+    )
 
-# 定义 3层 1维卷积神经网络 (1D CNN) [cite: 13, 15]
-class CNN1D(nn.Module):
-    def __init__(self):
-        super(CNN1D, self).__init__()
-        # 假设输入特征维度为 (Batch, Channels=1, Sequence_Length=15)
-        self.conv_layers = nn.Sequential(
-            # 第一层卷积 [cite: 15]
-            # 输出长度: 15-3+1 = 13
-            nn.Conv1d(in_channels=1, out_channels=16, kernel_size=3),
-            nn.ReLU(),
-            # 第二层卷积 [cite: 15]
-            # 输出长度: 13-3+1 = 11
-            nn.Conv1d(in_channels=16, out_channels=32, kernel_size=3),
-            nn.ReLU(),
-            # 第三层卷积 [cite: 15]
-            # 输出长度: 11-3+1 = 9
-            nn.Conv1d(in_channels=32, out_channels=64, kernel_size=3),
-            nn.ReLU(),
-        )
-        self.flatten = nn.Flatten()
-        self.fc = nn.Linear(64 * 9, 1)  # 9 是输出长度
+    # 计算错误符号数
+    errors = np.sum(pred_decisions != targets)
+    total_test_symbols = len(targets)
+    # 计算误符号率 SER
+    ser = errors / total_test_symbols
 
-    def forward(self, x):
-        # 注意：Conv1d 需要输入维度为 [N, C, L]，我们需要在 forward 里增加通道维度
-        x = x.unsqueeze(1)  # 把 (Batch, 15) 变成 (Batch, 1, 15)
-        x = self.conv_layers(x)
-        x = self.flatten(x)
-        return self.fc(x)
+    # 计算误比特率 BER
+    ber = calculate_ber(targets, pred_decisions)
 
+    print("-" * 30)
+    print(f"测试集样本总数: {total_test_symbols}")
+    print(f"错误判决个数: {errors}")
+    print(f"PAM8 误符号率 (SER): {ser:.6f}")
+    print(f"PAM8 比特误码率 (BER): {ber:.6f}")
 
-# 定义 2维卷积神经网络 (2D CNN)
-class CNN2D(nn.Module):
-    def __init__(self):
-        super(CNN2D, self).__init__()
-        # 假设我们将输入形状调整为 (Batch_size, Channels=1, Height=1, Width=15)
-        self.conv_layers = nn.Sequential(
-            # 第一层 2D 卷积，卷积核尺寸为 (1, 3)
-            nn.Conv2d(in_channels=1, out_channels=16, kernel_size=(1, 3)),
-            nn.ReLU(),
-            # 第二层 2D 卷积
-            nn.Conv2d(in_channels=16, out_channels=32, kernel_size=(1, 3)),
-            nn.ReLU(),
-        )
-        self.flatten = nn.Flatten()
-        # 经过两次核宽为 3 的无 Padding 卷积，Width 变为 15 - 2 - 2 = 11
-        self.fc = nn.Linear(32 * 1 * 11, 1)
+    # 4. 将最终的 SER 和 BER 写入 TensorBoard
+    writer.add_scalar("Metrics/Test_SER", ser, 0)
+    writer.add_scalar("Metrics/Test_BER", ber, 0)
 
-    def forward(self, x):
-        # 注意：Conv2d 需要输入维度为 [N, C, H, W]
-        # x 初始是 (Batch, 15)，连续增加两个维度变成 (Batch, 1, 1, 15)
-        x = x.unsqueeze(1).unsqueeze(1)
-        x = self.conv_layers(x)
-        x = self.flatten(x)
-        return self.fc(x)
-
-
-# 训练主流程与 Tensorboard 集成 [cite: 20, 21]
-def train_and_evaluate(
-    model, X_train, Y_train, X_test, Y_test, epochs=200, lr=0.005, run_name="MLP_Run"
-):
-    # 初始化 TensorBoard Writer
-    writer = SummaryWriter(f"runs/{run_name}")
-    criterion = nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=lr)
-    pam8_levels = np.array([-7, -5, -3, -1, 1, 3, 5, 7])
-    for epoch in range(epochs):
-        model.train()
-        optimizer.zero_grad()
-        outputs = model(X_train)
-        loss = criterion(outputs, Y_train)
-        loss.backward()
-        optimizer.step()
-        # 将训练 Loss 写入TensorBoard
-        writer.add_scalar("Loss/train", loss.item(), epoch)
-        if (epoch + 1) % 50 == 0:
-            print(f"Epoch [{epoch + 1}/{epochs}], Loss: {loss.item():.4f}")
-    # 测试集评估计算 BER
-    model.eval()
-    with torch.no_grad():
-        test_preds = model(X_test).numpy().flatten()
-        test_trues = Y_test.numpy().flatten()
-
-        # 1. 硬判决：拉回到最近的 PAM8 符号
-        pred_symbols = np.array(
-            [pam8_levels[np.argmin(np.abs(pam8_levels - p))] for p in test_preds]
-        )
-        # 2. 计算 BER [cite: 4, 10, 15]
-        ber = calculate_ber(test_trues, pred_symbols)
-        # 将最终 BER 写入 TensorBoard
-        writer.add_scalar("Metrics/Test_BER", ber, 0)
-        print(f"[{run_name}] 最终测试集 BER: {ber:.6f}")
-
-    writer.close()
+# 5. 关闭 Writer
+writer.close()

@@ -1,0 +1,11 @@
+[
+  {
+    "label": "tensorboard 可视化",
+    "command": "tensorboard",
+    "args": ["--logdir", "runs"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "save": "all",
+    "reveal": "always",
+    "hide": "never",
+  },
+]
