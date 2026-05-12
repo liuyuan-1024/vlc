@@ -6,29 +6,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.tensorboard.writer import SummaryWriter
 
-
-# 十进制与二进制(格雷码)转换模块
-def decimal_to_binary(decimal_num, bit_length=3):
-    """将十进制转换为固定长度的二进制字符串"""
-    return format(decimal_num, f"0{bit_length}b")
-
-
-def pam_to_gray_bits(symbol):
-    """将 PAM-8 符号 (-7 到 7) 转换为对应的 3bit 格雷码字符串"""
-    index = int((symbol + 7) // 2)
-    gray_dec = index ^ (index >> 1)
-    return decimal_to_binary(gray_dec, 3)
-
-
-def calculate_ber(y_true_symbols, y_pred_symbols):
-    """动态计算比特误码率（BER）"""
-    bit_errors = 0
-    total_bits = len(y_true_symbols) * 3
-    for true_sym, pred_sym in zip(y_true_symbols, y_pred_symbols):
-        true_bits = pam_to_gray_bits(true_sym)
-        pred_bits = pam_to_gray_bits(pred_sym)
-        bit_errors += sum(1 for a, b in zip(true_bits, pred_bits) if a != b)
-    return bit_errors / total_bits
+from utils import calculate_ber
 
 
 # 任务 3 & 4: 构建优化的 Dataset 和 DataLoader
@@ -59,8 +37,8 @@ class VLCDataset(Dataset):
 
 def main():
     # 提取数据
-    tx_data = sio.loadmat("exp15_paras.mat")["originPAM"].flatten()
-    rx_data = sio.loadmat("exp15_CHAN1_2859.mat")["pamRecv"].flatten()
+    tx_data = sio.loadmat("./data/exp15_paras.mat")["originPAM"].flatten()
+    rx_data = sio.loadmat("./data/exp15_CHAN1_2859.mat")["pamRecv"].flatten()
 
     # 数据预处理 (仅在接收信号两端补零，一维数组，占用内存极小)
     window_size = 15

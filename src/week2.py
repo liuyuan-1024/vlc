@@ -7,9 +7,11 @@ import torch.optim as optim
 # 导入 TensorBoard
 from torch.utils.tensorboard.writer import SummaryWriter
 
+from utils import calculate_ber
+
 # 提取数据并展平为一维数组
-tx_data = sio.loadmat("exp15_paras.mat")["originPAM"].flatten()
-rx_data = sio.loadmat("exp15_CHAN1_2859.mat")["pamRecv"].flatten()
+tx_data = sio.loadmat("./data/exp15_paras.mat")["originPAM"].flatten()
+rx_data = sio.loadmat("./data/exp15_CHAN1_2859.mat")["pamRecv"].flatten()
 
 print(f"tx 长度: {len(tx_data)}, rx 长度: {len(rx_data)}")
 
@@ -74,45 +76,6 @@ for epoch in range(epochs):
 
     if (epoch + 1) % 50 == 0:
         print(f"Epoch [{epoch + 1}/{epochs}], Loss: {loss.item():.4f}")
-
-
-# 十进制转二进制的基础函数
-def decimal_to_binary(decimal_num, bit_length=3):
-    """将十进制转换为固定长度的二进制字符串"""
-    if decimal_num < 0:
-        raise ValueError("仅支持非负整数")
-    return format(decimal_num, f"0{bit_length}b")
-
-
-# 动态映射：PAM符号 -> 格雷码比特串
-def pam_to_gray_bits(symbol):
-    """将 PAM-8 符号 (-7 到 7) 转换为对应的 3bit 格雷码字符串"""
-    # 步骤A: 将符号电平映射为 0~7 的十进制索引 (-7->0, -5->1 ... 7->7)
-    index = int((symbol + 7) // 2)
-
-    # 步骤B: 将自然二进制索引转换为格雷码十进制值 (公式: Gray = n XOR (n右移1位))
-    gray_dec = index ^ (index >> 1)
-
-    # 步骤C: 使用十进制转二进制函数输出最终比特
-    return decimal_to_binary(gray_dec, 3)
-
-
-# 计算 BER 函数
-def calculate_ber(y_true_symbols, y_pred_symbols):
-    """计算比特误码率（BER）"""
-    bit_errors = 0
-    # PAM-8 每个符号 3 个比特
-    total_bits = len(y_true_symbols) * 3
-
-    for true_sym, pred_sym in zip(y_true_symbols, y_pred_symbols):
-        # 动态生成格雷码比特，不再依赖写死的字典
-        true_bits = pam_to_gray_bits(true_sym)
-        pred_bits = pam_to_gray_bits(pred_sym)
-
-        # 逐位对比，不同则错误数 + 1
-        bit_errors += sum(1 for a, b in zip(true_bits, pred_bits) if a != b)
-
-    return bit_errors / total_bits
 
 
 # 测试并计算 PAM8 误符号率 (SER) 与 误比特率 (BER)

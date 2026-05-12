@@ -5,8 +5,8 @@ import torch.nn as nn
 import torch.optim as optim
 
 # 提取数据并展平为一维数组
-tx_data = sio.loadmat("exp15_paras.mat")["originPAM"].flatten()
-rx_data = sio.loadmat("exp15_CHAN1_2859.mat")["pamRecv"].flatten()
+tx_data = sio.loadmat("./data/exp15_paras.mat")["originPAM"].flatten()
+rx_data = sio.loadmat("./data/exp15_CHAN1_2859.mat")["pamRecv"].flatten()
 
 print(f"tx 长度: {len(tx_data)}, rx 长度: {len(rx_data)}")
 
